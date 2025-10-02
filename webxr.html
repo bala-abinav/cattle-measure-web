@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Cattle Measure – WebXR (Beta)</title>
+  <style>
+    html, body { margin:0; padding:0; height:100%; overflow:hidden; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji'; }
+    #ui { position: fixed; top: env(safe-area-inset-top); left: 0; right: 0; padding: 10px 12px; display:flex; gap:8px; align-items:center; justify-content: space-between; mix-blend-mode: normal; z-index:10; }
+    .pill { background: rgba(0,0,0,.6); color:#fff; padding:8px 12px; border-radius: 999px; font-size:14px; display:flex; align-items:center; gap:8px; }
+    .btn { cursor:pointer; user-select:none; }
+    #status { flex:1; min-width:0; overflow:hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #unitToggle { background:#fff; color:#111; }
+    #footer { position: fixed; bottom: env(safe-area-inset-bottom); left:0; right:0; display:flex; gap:10px; justify-content:center; padding: 10px 12px; z-index:10; }
+    #enterAR { padding:12px 18px; border-radius:12px; background:#2f80ed; color:#fff; border:none; font-size:16px; box-shadow:0 8px 24px rgba(47,128,237,.35); }
+    #unsupported { position: absolute; inset: 0; display:none; place-items:center; padding: 24px; text-align:center; background: #0b0b0b; color:#fff; }
+    #unsupported a { color: #7cc0ff; }
+    canvas { display:block; }
+    .badge { padding:6px 10px; border-radius:999px; background: rgba(255,255,255,.15); }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div class="pill" id="status">Move phone to find a surface…</div>
+    <div class="pill btn" id="reset">Reset</div>
+    <div class="pill btn" id="unitToggle" title="Toggle units">cm</div>
+  </div>
+
+  <div id="footer">
+    <button id="enterAR">Enter AR</button>
+  </div>
+
+  <div id="unsupported">
+    <div>
+      <h2 style="margin-top:0">WebXR AR not supported on this device/browser</h2>
+      <p>This demo requires Chrome on Android with camera permissions. On iOS, Safari currently doesn’t expose WebXR. For iPhones/iPads, consider a marker‑based fallback (e.g., AR.js with a printed marker of known size) or a commercial WebAR solution that bridges to ARKit.</p>
+      <p class="badge">Tip: You can still open this page on an Android device to try the AR experience.</p>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.161.0/build/three.module.js';
+    import { ARButton } from 'https://unpkg.com/three@0.161.0/examples/jsm/webxr/ARButton.js';
+
+    // --- DOM
+    const statusEl = document.getElementById('status');
+    const resetEl = document.getElementById('reset');
+    const unitToggleEl = document.getElementById('unitToggle');
+    const enterBtn = document.getElementById('enterAR');
+    const unsupported = document.getElementById('unsupported');
+
+    // --- Renderer & Scene
+    const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.xr.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera();
+
+    // Light for line endpoint spheres
+    const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
+    light.position.set(0.5, 1, 0.25);
+    scene.add(light);
+
+    // Reticle
+    const reticleGeo = new THREE.RingGeometry(0.05, 0.06, 32).rotateX(-Math.PI/2);
+    const reticleMat = new THREE.MeshBasicMaterial({ color:0x00ff99 });
+    const reticle = new THREE.Mesh(reticleGeo, reticleMat);
+    reticle.matrixAutoUpdate = false;
+    reticle.visible = false;
+    scene.add(reticle);
+
+    // Measurement visuals
+    const pointGeo = new THREE.SphereGeometry(0.01, 16, 16);
+    const pointMat = new THREE.MeshStandardMaterial({ color: 0xff3366, metalness:0.1, roughness:0.5 });
+    const points = []; // THREE.Mesh
+
+    const lineMat = new THREE.LineBasicMaterial({ linewidth: 4 });
+    let line = null; // THREE.Line
+
+    let useMetric = true; // cm vs inches
+
+    // XR state
+    let xrRefSpace = null;
+    let hitTestSource = null;
+    let hitTestSourceRequested = false;
+
+    // Tap handling
+    function onSelect() {
+      if (!reticle.visible) return;
+
+      const p = new THREE.Mesh(pointGeo, pointMat);
+      p.position.setFromMatrixPosition(reticle.matrix);
+      scene.add(p);
+      points.push(p);
+
+      if (points.length === 2) {
+        drawLineAndLabel();
+      } else if (points.length > 2) {
+        // keep only latest two
+        for (let i = 0; i < points.length - 2; i++) scene.remove(points[i]);
+        points.splice(0, points.length - 2);
+        if (line) { scene.remove(line); line.geometry.dispose(); line = null; }
+        drawLineAndLabel();
+      }
+    }
+
+    function drawLineAndLabel() {
+      const a = points[0].position, b = points[1].position;
+      const geom = new THREE.BufferGeometry().setFromPoints([a, b]);
+      line = new THREE.Line(geom, lineMat);
+      scene.add(line);
+
+      const meters = a.distanceTo(b);
+      showDistance(meters);
+    }
+
+    function showDistance(meters) {
+      const value = useMetric ? (meters * 100).toFixed(1) + ' cm' : (meters * 39.3701).toFixed(2) + ' in';
+      statusEl.textContent = `Distance: ${value}`;
+    }
+
+    resetEl.addEventListener('click', () => {
+      points.forEach(p => scene.remove(p));
+      points.length = 0;
+      if (line) { scene.remove(line); line.geometry.dispose(); line = null; }
+      statusEl.textContent = 'Tap to place two points on the cow (e.g., withers to hoof)…';
+    });
+
+    unitToggleEl.addEventListener('click', () => {
+      useMetric = !useMetric;
+      unitToggleEl.textContent = useMetric ? 'cm' : 'in';
+      if (points.length === 2) {
+        const a = points[0].position, b = points[1].position;
+        showDistance(a.distanceTo(b));
+      }
+    });
+
+    // Enter AR
+    async function canRunAR() {
+      if (!('xr' in navigator)) return false;
+      try { return await navigator.xr.isSessionSupported('immersive-ar'); } catch { return false; }
+    }
+
+    async function startAR() {
+      const supported = await canRunAR();
+      if (!supported) {
+        unsupported.style.display = 'grid';
+        return;
+      }
+
+      const session = await navigator.xr.requestSession('immersive-ar', {
+        requiredFeatures: ['hit-test'],
+        optionalFeatures: ['dom-overlay', 'unbounded', 'depth-sensing'],
+        domOverlay: { root: document.body },
+        depthSensing: { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha'] }
+      });
+
+      renderer.xr.setReferenceSpaceType('local');
+      await renderer.xr.setSession(session);
+
+      xrRefSpace = await session.requestReferenceSpace('local');
+
+      // Set up input for taps
+      const controller = renderer.xr.getController(0);
+      controller.addEventListener('select', onSelect);
+      scene.add(controller);
+
+      // Hit test source
+      session.addEventListener('end', () => {
+        hitTestSourceRequested = false;
+        hitTestSource = null;
+      });
+
+      renderer.setAnimationLoop(renderXR);
+      statusEl.textContent = 'Move to aim the ring, tap to set points';
+    }
+
+    async function getHitTestSource(frame, session) {
+      if (!hitTestSourceRequested) {
+        const viewerSpace = await session.requestReferenceSpace('viewer');
+        hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+        hitTestSourceRequested = true;
+      }
+    }
+
+    function renderXR(time, frame) {
+      const session = renderer.xr.getSession();
+      if (frame) {
+        getHitTestSource(frame, session);
+        const pose = frame.getViewerPose(xrRefSpace);
+        if (hitTestSource && pose) {
+          const results = frame.getHitTestResults(hitTestSource);
+          if (results.length) {
+            const hit = results[0];
+            const hitPose = hit.getPose(xrRefSpace);
+            reticle.visible = true;
+            reticle.matrix.fromArray(hitPose.transform.matrix);
+            statusEl.textContent = (points.length < 2) ? 'Tap to place points' : statusEl.textContent;
+          } else {
+            reticle.visible = false;
+            statusEl.textContent = 'Move phone to find a surface…';
+          }
+        }
+      }
+      renderer.render(scene, camera);
+    }
+
+    // Resize
+    window.addEventListener('resize', () => {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Button wiring
+    enterBtn.addEventListener('click', startAR);
+
+    // Initial support check (to pre-show unsupported panel on non-AR browsers)
+    (async () => {
+      if (!(await canRunAR())) {
+        // Don’t block Android Chrome users – they’ll still be able to try; only show after press if needed.
+        // Here we only adjust the CTA label if unsupported.
+        enterBtn.textContent = 'Try on Android (Chrome)';
+      }
+    })();
+  </script>
+</body>
+</html>
