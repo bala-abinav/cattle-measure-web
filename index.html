@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AR Support Check</title>
+</head>
+<body>
+  <h1>WebXR AR Support Check</h1>
+  <div id="status">Checking...</div>
+
+  <script>
+    const statusDiv = document.getElementById("status");
+
+    if (navigator.xr) {
+      navigator.xr.isSessionSupported("immersive-ar").then((supported) => {
+        if (supported) {
+          statusDiv.textContent = "✅ Your device/browser supports WebXR AR (ARCore available).";
+        } else {
+          statusDiv.textContent = "❌ AR session not supported on this device.";
+        }
+      }).catch((err) => {
+        statusDiv.textContent = "⚠️ Error checking AR support: " + err;
+      });
+    } else {
+      statusDiv.textContent = "❌ WebXR is not available in this browser.";
+    }
+  </script>
+</body>
+</html>
